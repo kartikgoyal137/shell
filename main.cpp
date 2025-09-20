@@ -44,6 +44,7 @@ int main() {
   list_of_cmd.insert("exit");
   list_of_cmd.insert("echo");
   list_of_cmd.insert("pwd");
+  list_of_cmd.insert("cd");
 
   // Uncomment this block to pass the first stage
   
@@ -72,7 +73,21 @@ int main() {
     else if(cmd_name=="pwd") {
       char buffer[1024]; getcwd(buffer, 1024);
       std::string cwd(buffer);
-      std::cout << cwd << " is a shell builtin" << std::endl;
+      std::cout << cwd << std::endl;
+    }
+    else if(cmd_name=="cd") {
+      std::string arg1 = input.substr(pos+1);
+      if(arg1=="~") {
+          arg1 = std::getenv("HOME");
+          fs::current_path(arg1);
+        }
+      else if(fs::exists(arg1) && fs::is_directory(arg1)) {
+        fs::current_path(arg1);
+      }
+      else {
+        std::cout << "cd: " << arg1 << ": No such file or directory" << std::endl;
+      }
+      
     }
     else if(cmd_name=="echo") {
       std::string arg1 = input.substr(pos+1);
