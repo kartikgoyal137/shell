@@ -131,7 +131,7 @@ char** cmd_name_complete(const char* text, int start, int end) {
   return rl_completion_matches(text, cmd_name_gen);
 }
 
-int fill_cmd() {
+int fill_cmd_names() {
   const char* path_env = std::getenv("PATH");
   if (!path_env) {
       std::cerr << "PATH environment variable not found\n";
@@ -174,7 +174,7 @@ int main() {
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
 
-  fill_cmd();
+  fill_cmd_names();
 
   rl_attempted_completion_function = cmd_name_complete;
 
@@ -184,6 +184,7 @@ int main() {
   list_of_cmd.insert("echo");
   list_of_cmd.insert("pwd");
   list_of_cmd.insert("cd");
+  list_of_cmd.insert("history");
   
 
   std::string input;
@@ -198,9 +199,13 @@ int main() {
     start = pos+1;
   }
 
-  while(true) {
-    char* inp = readline("$ ");
-    if(!inp) break;
+  char* inp;
+  while((inp = readline("$ ")) != nullptr) {
+
+    if (strlen(inp) > 0) {
+      add_history(inp);
+    }
+
     std::string input(inp);
     free(inp);
     
@@ -265,6 +270,23 @@ int main() {
         }
         else {
           std::cout << arg1 << ": not found" << std::endl;
+        }
+      }
+    }
+    else if(cmd_name=="history") {
+      HIST_ENTRY **hist_list = history_list();
+      
+      int l = 0;
+      while(hist_list[l]) {
+        l++;
+      }
+      int n = l;
+      if(arg1!="") n = std::stoi(arg1);
+      
+
+      if (hist_list) {
+        for (int i = l-n; i<l; i++) {
+            std::cout << i+1 << " " << hist_list[i]->line << std::endl;
         }
       }
     }
