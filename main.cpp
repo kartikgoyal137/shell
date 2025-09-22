@@ -7,6 +7,9 @@
 #include <vector>
 #include <cstdlib>
 #include <unistd.h>
+#include <cstring>
+#include <readline/readline.h>
+#include <readline/history.h>
 
 namespace fs = std::filesystem;
 
@@ -98,9 +101,82 @@ std::string shell_quote(const std::string& s) {
     return quoted_s;
 }
 
+std::vector<char*> list_of_cmdGLOBAL = {
+    "cat",
+    "echo",
+    "type",
+    "pwd",
+    "exit",
+};
+
+char* cmd_name_gen(const char* text, int state) {
+  static int list_index, len;
+  char* cmd_name;
+
+  if(!state) {
+    list_index = 0;
+    len = strlen(text); 
+  }
+
+  while((cmd_name=list_of_cmdGLOBAL[list_index++])) {
+    if(strncmp(cmd_name, text, len) == 0) {
+      return strdup(cmd_name);
+    }
+  }
+  return NULL;
+}
+
+char** cmd_name_complete(const char* text, int start, int end) {
+  rl_attempted_completion_over = 1;
+  return rl_completion_matches(text, cmd_name_gen);
+}
+
+int fill_cmd() {
+  const char* path_env = std::getenv("PATH");
+  if (!path_env) {
+      std::cerr << "PATH environment variable not found\n";
+      return 1;
+  }
+  std::string path_str(path_env);
+  size_t start=0, end=0;
+  while((end=path_str.find(':', start))!=std::string::npos) {
+    std::string dir_path = path_str.substr(start, end-start);
+    if (fs::exists(dir_path) && fs::is_directory(dir_path)) {
+            for (auto& entry : fs::directory_iterator(dir_path)) {
+                if (is_executable(entry.path())) {
+                    std::string filename = entry.path().filename().string();
+                    char* cstr = new char[filename.size()+1];
+                    std::strcpy(cstr, filename.c_str());
+                    list_of_cmdGLOBAL.push_back(cstr);
+                }
+            }
+    }
+    start = end+1;
+  }
+  std::string dir_last = path_str.substr(start);
+  if (fs::exists(dir_last) && fs::is_directory(dir_last)) {
+            for (auto& entry : fs::directory_iterator(dir_last)) {
+                if (is_executable(entry.path())) {
+                    std::string filename = entry.path().filename().string();
+                    char* cstr = new char[filename.size()+1];
+                    std::strcpy(cstr, filename.c_str());
+                    list_of_cmdGLOBAL.push_back(cstr);
+                }
+            }
+    }
+
+    list_of_cmdGLOBAL.push_back(NULL);
+
+    return 0;
+}
+
 int main() {
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
+
+  fill_cmd();
+
+  rl_attempted_completion_function = cmd_name_complete;
 
   std::set<std::string> list_of_cmd;
   list_of_cmd.insert("type");
@@ -123,8 +199,11 @@ int main() {
   }
 
   while(true) {
-    std::cout << "$ ";
-    std::getline(std::cin, input);
+    char* inp = readline("$ ");
+    if(!inp) break;
+    std::string input(inp);
+    free(inp);
+    
     std::vector<std::string> parsed_line;
     parsed_line = parse_line(input);
     std::string cmd_name = parsed_line[0];
