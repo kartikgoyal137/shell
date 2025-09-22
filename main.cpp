@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include <sstream>
+#include <fstream>
 #include <set>
 #include <filesystem>
 #include <vector>
@@ -15,6 +16,56 @@ bool is_executable(const fs::path& p) {
     return (perms & fs::perms::owner_exec) != fs::perms::none ||
            (perms & fs::perms::group_exec) != fs::perms::none ||
            (perms & fs::perms::others_exec) != fs::perms::none;
+}
+
+std::vector<std::string> parse_line(const std::string& input) {
+    std::vector<std::string> result;
+    std::string current;
+    bool in_single_quote = false;
+    bool in_double_quote = false;
+
+    for (size_t i=0; i<input.size(); ++i) {
+        char c = input[i];
+        if(c=='\\' && i+1<input.size()) {
+          if(!in_single_quote && !in_double_quote) {
+            current += input[i+1];
+            i++;
+            continue;
+          }
+          if(in_double_quote) {
+            if(input[i+1]=='\"' || input[i+1]=='\\' || input[i+1]=='\$' || input[i+1]=='\`') {
+              current+=input[i+1];
+              i++;
+              continue;
+            }
+          }
+        }
+        if (c == '\'') {
+          if(in_double_quote) {current+=c; continue;}
+            in_single_quote = !in_single_quote;
+            continue;
+        }
+        else if(c == '\"') {
+          if(in_single_quote) {current+=c; continue;}
+          in_double_quote = !in_double_quote;
+          
+          continue;
+        }
+        if (c == ' ' && !in_single_quote && !in_double_quote) {
+            if (!current.empty()) { //
+                result.push_back(current);
+                current.clear();
+            }
+            continue; 
+        }
+        current += c;
+    }
+
+    if (!current.empty()) {
+        result.push_back(current);
+    }
+
+    return result;
 }
 
 fs::path check_in_path(std::vector<std::string> paths, std::string arg1, bool& found) {
@@ -34,8 +85,20 @@ fs::path check_in_path(std::vector<std::string> paths, std::string arg1, bool& f
         return {};
 }
 
+std::string shell_quote(const std::string& s) {
+    std::string quoted_s = "'";
+    for (char c : s) {
+        if (c == '\'') {
+            quoted_s += "'\\''";
+        } else {
+            quoted_s += c;
+        }
+    }
+    quoted_s += "'";
+    return quoted_s;
+}
+
 int main() {
-  // Flush after every std::cout / std:cerr
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
 
@@ -45,8 +108,6 @@ int main() {
   list_of_cmd.insert("echo");
   list_of_cmd.insert("pwd");
   list_of_cmd.insert("cd");
-
-  // Uncomment this block to pass the first stage
   
 
   std::string input;
@@ -64,11 +125,14 @@ int main() {
   while(true) {
     std::cout << "$ ";
     std::getline(std::cin, input);
-    std::istringstream cl(input);
-    size_t pos = input.find(" ");
-    std::string cmd_name = input.substr(0,pos);
+    std::vector<std::string> parsed_line;
+    parsed_line = parse_line(input);
+    std::string cmd_name = parsed_line[0];
+    std::string arg1 = "";
+    if(parsed_line.size()>1) arg1 = parsed_line[1];
+    
     if(cmd_name=="exit") {
-      if(input.substr(pos+1, 1)=="0") break;
+      if(arg1=="0") return 0;
     }
     else if(cmd_name=="pwd") {
       char buffer[1024]; getcwd(buffer, 1024);
@@ -76,7 +140,7 @@ int main() {
       std::cout << cwd << std::endl;
     }
     else if(cmd_name=="cd") {
-      std::string arg1 = input.substr(pos+1);
+      
       if(arg1=="~") {
           arg1 = std::getenv("HOME");
           fs::current_path(arg1);
@@ -90,11 +154,26 @@ int main() {
       
     }
     else if(cmd_name=="echo") {
-      std::string arg1 = input.substr(pos+1);
-      std::cout << arg1 << std::endl;
+      for(auto& i : parsed_line) {
+        if(i == "echo") continue;
+        std::cout << i << " ";
+      }
+       
+      std::cout << std::endl;
     }
+    else if(cmd_name=="cat") {
+      for (const auto &filename : parsed_line) {
+        if(filename=="cat") continue;
+        std::ifstream file(filename);
+        if (file) {
+            std::cout << file.rdbuf();
+        } else {
+            std::cerr << "cat: " << filename << ": No such file or directory\n";
+        }
+      }
+        std::cout << std::flush;
+        }
     else if(cmd_name=="type") {
-      std::string arg1 = input.substr(pos+1);
 
       if(list_of_cmd.find(arg1)!=list_of_cmd.end()) {
         std::cout << arg1 << " is a shell builtin" << std::endl;
@@ -112,18 +191,18 @@ int main() {
     }
     else {
       bool found = false;
-      auto path = check_in_path(paths, cmd_name, found);
-      if(found) {
-        std::string arg1 = input.substr(pos+1);
-        std::string exe_0 = path.filename().string() + " " + arg1;
-        int exe = std::system(exe_0.c_str());
+      auto path = check_in_path(paths, cmd_name, found).filename();
+      if (found) {
+        std::string command_to_run = shell_quote(path.string());
+        for (size_t i = 1; i < parsed_line.size(); ++i) {
+            command_to_run += " " + shell_quote(parsed_line[i]);
+        }
+        std::system(command_to_run.c_str());
+      } else {
+        std::cout << cmd_name << ": command not found" << std::endl;
       }
-      else {
-        std::cout << input << ": command not found" << std::endl;
-      }
-      
     }
-
+    
     
   }
   
