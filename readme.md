@@ -1,6 +1,6 @@
-# Ember
+# EmberShell
 
-CppShell is a lightweight, custom command-line shell written in C++. It mimics the core functionality of traditional UNIX shells like bash, providing an interactive interface to the operating system. This project demonstrates fundamental concepts of process management, inter-process communication, and system calls.
+EmberShell is a lightweight, custom command-line shell written in C++. It mimics the core functionality of traditional UNIX shells like bash, providing an interactive interface to the operating system. This project demonstrates fundamental concepts of process management, inter-process communication, and system calls.
 
 ## Features
 
