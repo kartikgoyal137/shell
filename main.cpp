@@ -11,6 +11,7 @@
 #include <readline/readline.h>
 #include <sys/wait.h> 
 #include <readline/history.h>
+#include <algorithm>
 
 namespace fs = std::filesystem;
 
@@ -72,10 +73,10 @@ std::vector<std::string> parse_line(const std::string& input) {
     return result;
 }
 
-fs::path check_in_path(std::vector<std::string> paths, std::string arg1, bool& found) {
+fs::path check_in_path(const std::vector<std::string>& paths, std::string arg1, bool& found) {
         try {
-        for(auto& path : paths) {
-        for(auto& cmd : fs::directory_iterator(path)) {
+        for(const auto& path : paths) {
+        for(const auto& cmd : fs::directory_iterator(path)) {
           if(cmd.path().filename() == arg1 && is_executable(cmd.path())) {
             found = true;
           }
@@ -184,6 +185,37 @@ int fill_history() {
   return 0;
 }
 
+void handle_echo(const std::vector<std::string>& parsed_line) {
+  for(size_t i = 1; i < parsed_line.size(); ++i) {
+        std::cout << parsed_line[i] << (i == parsed_line.size() - 1 ? "" : " ");
+  }
+  std::cout << std::endl;
+}
+
+void handle_pwd() {
+      char buffer[1024]; getcwd(buffer, 1024);
+      std::string cwd(buffer);
+      std::cout << cwd << std::endl;
+}
+
+void handle_type(const std::vector<std::string>& args, const std::set<std::string>& list_of_cmd, const std::vector<std::string>& paths) {
+  if (args.size() < 2) return;
+    std::string arg1 = args[1];
+  if(list_of_cmd.count(arg1)) {
+        std::cout << arg1 << " is a shell builtin" << std::endl;
+      }
+      else {
+        bool found = false;
+        auto path = check_in_path(paths, arg1, found);
+        if(found){
+          std::cout << arg1 << " is " << path.string() << std::endl;
+        }
+        else {
+          std::cout << arg1 << ": not found" << std::endl;
+        }
+}
+}
+
 int main() {
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
@@ -204,15 +236,17 @@ int main() {
   list_of_cmd.insert("history");
   
 
-  std::string input;
-  std::string path = std::getenv("PATH");
+  std::string path_env_str = getenv("PATH");
   std::vector<std::string>paths;
   size_t pos = 0;
   size_t start = 0;
   while(true) {
-    pos = path.find(":", start);
-    if(pos==std::string::npos) break;
-    paths.push_back(path.substr(start, pos-start));
+    pos = path_env_str.find(":", start);
+    if(pos==std::string::npos) {
+        paths.push_back(path_env_str.substr(start));
+        break;
+    }
+    paths.push_back(path_env_str.substr(start, pos-start));
     start = pos+1;
   }
 
@@ -226,144 +260,186 @@ int main() {
     std::string input(inp);
     free(inp);
     
-    std::vector<std::string> parsed_line;
-    parsed_line = parse_line(input);
+    std::vector<std::string> parsed_line = parse_line(input);
     if(parsed_line.empty()) continue;
-    std::string cmd_name = parsed_line[0];
-    std::string arg1 = "";
-    if(parsed_line.size()>1) arg1 = parsed_line[1];
-    
-    if(cmd_name=="exit") {
-      HIST_ENTRY **hist_list = history_list();
-      
-      int l = 0;
-      while(hist_list[l]) {
-        l++;
-      }
-      const char* path_hist = std::getenv("HISTFILE");
-      if(arg1=="0") {
-        if(path_hist)
-        write_history(path_hist);
-        return 0;
-      }
-    }
-    else if(cmd_name=="pwd") {
-      char buffer[1024]; getcwd(buffer, 1024);
-      std::string cwd(buffer);
-      std::cout << cwd << std::endl;
-    }
-    else if(cmd_name=="cd") {
-      
-      if(arg1=="~") {
-          arg1 = std::getenv("HOME");
-          fs::current_path(arg1);
+
+    bool has_pipe = false;
+    for (const auto& token : parsed_line) {
+        if (token == "|") {
+            has_pipe = true;
+            break;
         }
-      else if(fs::exists(arg1) && fs::is_directory(arg1)) {
-        fs::current_path(arg1);
-      }
-      else {
-        std::cout << "cd: " << arg1 << ": No such file or directory" << std::endl;
+    }
+    
+    if (has_pipe) {
+      std::vector<std::vector<std::string>> segments;
+      segments.emplace_back();
+      for(const auto& token : parsed_line) {
+          if (token == "|") {
+              segments.emplace_back();
+          } else {
+              segments.back().push_back(token);
+          }
       }
       
-    }
-    else if(cmd_name=="echo") {
-      for(auto& i : parsed_line) {
-        if(i == "echo") continue;
-        std::cout << i << " ";
+      int n = segments.size();
+      std::vector<pid_t> pid_list;
+      int pipes[n-1][2];
+
+      for (int i = 0; i < n-1; i++) {
+          if (pipe(pipes[i]) == -1) {
+              perror("pipe");
+              exit(1);
+          }
       }
-       
-      std::cout << std::endl;
-    }
-    else if(cmd_name=="cat") {
-      for (const auto &filename : parsed_line) {
-        if(filename=="cat") continue;
-        std::ifstream file(filename);
-        if (file) {
-            std::cout << file.rdbuf();
+
+      for(int j=0; j<n; j++) {
+        std::string cmd_name = segments[j][0];
+        bool is_builtin = list_of_cmd.count(cmd_name);
+        bool found_external = false;
+        check_in_path(paths, cmd_name, found_external);
+
+        if (is_builtin || found_external) {
+          pid_t pid = fork();
+          if(pid<0) {
+            perror("fork failed");
+            exit(EXIT_FAILURE);
+          }
+          else if(pid==0) { 
+            if (j > 0) {
+                  dup2(pipes[j - 1][0], STDIN_FILENO);
+            }
+            if (j < n - 1) {
+                dup2(pipes[j][1], STDOUT_FILENO);
+            }
+            for (int k = 0; k < n-1; k++) {
+                close(pipes[k][0]);
+                close(pipes[k][1]);
+            }
+
+            if (cmd_name == "echo") {
+                handle_echo(segments[j]);
+                exit(0); 
+            } else if (cmd_name == "pwd") {
+                handle_pwd();
+                exit(0); 
+            } else if (cmd_name == "type") {
+                handle_type(segments[j], list_of_cmd, paths);
+                exit(0);
+            } else { 
+                std::vector<char*> args;
+                for (const auto& s : segments[j]) {
+                    args.push_back(const_cast<char*>(s.c_str()));
+                }
+                args.push_back(nullptr);
+                execvp(args[0], args.data());
+                perror("execvp failed");
+                exit(1);
+            }
+          } else {
+             pid_list.push_back(pid);
+          }
         } else {
-            std::cerr << "cat: " << filename << ": No such file or directory\n";
+          std::cout << cmd_name << ": command not found" << std::endl;
+          break;
         }
       }
-        std::cout << std::flush;
-        }
-    else if(cmd_name=="type") {
+      for (int j = 0; j < n-1; j++) {
+          close(pipes[j][0]);
+          close(pipes[j][1]);
+      }
+      for(auto& k : pid_list) {
+        int status;
+        waitpid(k, &status, 0);
+      }
+    } else {
+        std::string cmd_name = parsed_line[0];
+        std::string arg1 = parsed_line.size() > 1 ? parsed_line[1] : "";
 
-      if(list_of_cmd.find(arg1)!=list_of_cmd.end()) {
-        std::cout << arg1 << " is a shell builtin" << std::endl;
-      }
-      else {
-        bool found = false;
-        auto path = check_in_path(paths, arg1, found);
-        if(found){
-          std::cout << arg1 << " is " << path.string() << std::endl;
+        if(cmd_name=="exit") {
+            const char* path_hist = std::getenv("HISTFILE");
+            if(arg1=="0") {
+                if(path_hist) write_history(path_hist);
+                return 0;
+            }
+        } else if(cmd_name=="pwd") {
+            handle_pwd();
+        } else if(cmd_name=="cd") {
+            std::string target_dir = arg1;
+            if(target_dir.empty() || target_dir == "~") {
+                target_dir = getenv("HOME");
+            }
+            if(fs::exists(target_dir) && fs::is_directory(target_dir)) {
+                fs::current_path(target_dir);
+            } else {
+                std::cout << "cd: " << arg1 << ": No such file or directory" << std::endl;
+            }
+        } else if(cmd_name=="echo") {
+            handle_echo(parsed_line);
+        } else if(cmd_name=="cat") {
+            for (size_t i = 1; i < parsed_line.size(); ++i) {
+                std::ifstream file(parsed_line[i]);
+                if (file) {
+                    std::cout << file.rdbuf();
+                } else {
+                    std::cerr << "cat: " << parsed_line[i] << ": No such file or directory\n";
+                }
+            }
+        } else if(cmd_name=="type") {
+            handle_type(parsed_line, list_of_cmd, paths);
+        } else if(cmd_name=="history") {
+            HIST_ENTRY **hist_list = history_list();
+            if (hist_list) {
+                if (arg1 == "-w") {
+                    if (parsed_line.size() > 2) write_history(parsed_line[2].c_str());
+                } else if (arg1 == "-a") {
+                    if (parsed_line.size() > 2) {
+                        int new_entries = history_length - last_history_append_len;
+                        if(new_entries>0) append_history(new_entries, parsed_line[2].c_str());
+                        last_history_append_len = history_length;
+                    }
+                } else if (arg1 == "-r") {
+                    if (parsed_line.size() > 2) read_history(parsed_line[2].c_str());
+                } else {
+                     int l = 0;
+                     while(hist_list[l]) l++;
+                     int n = l;
+                     if(!arg1.empty() && arg1.find_first_not_of("0123456789") == std::string::npos) {
+                         n = std::stoi(arg1);
+                     }
+                     if (n > l) n = l;
+                     for (int i = l - n; hist_list[i]; i++) {
+                         std::cout << i + 1 << " " << hist_list[i]->line << std::endl;
+                     }
+                }
+            }
+        } else { 
+            bool found = false;
+            auto path = check_in_path(paths, cmd_name, found);
+            if (found) {
+                std::vector<char*> args;
+                for(const auto& arg : parsed_line) {
+                    args.push_back(const_cast<char*>(arg.c_str()));
+                }
+                args.push_back(nullptr);
+
+                pid_t pid = fork();
+                if(pid<0) {
+                    perror("fork failed");
+                    exit(EXIT_FAILURE);
+                } else if(pid==0) {
+                    execvp(args[0], args.data());
+                    perror("execvp failed");
+                    exit(EXIT_FAILURE);
+                } else {
+                    int status;
+                    waitpid(pid, &status, 0);
+                }
+            } else {
+                std::cout << cmd_name << ": command not found" << std::endl;
+            }
         }
-        else {
-          std::cout << arg1 << ": not found" << std::endl;
-        }
-      }
     }
-    else if(cmd_name=="history") {
-
-      HIST_ENTRY **hist_list = history_list();
-      
-      int l = 0;
-      while(hist_list[l]) {
-        l++;
-      }
-      int n = l;
-      if(arg1!="" && arg1!="-r" && arg1!="-w" && arg1!="-a") n = std::stoi(arg1);
-      
-
-      if (hist_list) {
-
-          if (arg1 == "-w") {
-            write_history(parsed_line[2].c_str());
-            continue;
-        } else if (arg1 == "-a") {
-          int new_entries = history_length - last_history_append_len;
-            if(new_entries>0) append_history(new_entries, parsed_line[2].c_str());
-            last_history_append_len = history_length;
-            continue;
-        } else if (arg1 == "-r") {
-            read_history(parsed_line[2].c_str());
-            continue;
-        }
-
-        for (int i = l-n; i<l; i++) {
-          std::cout << i+1 << " " << hist_list[i]->line << std::endl;
-        }
-      }
-    }
-    else {
-      bool found = false;
-      auto path = check_in_path(paths, cmd_name, found);
-      if (found) {
-        std::vector<char*> args;
-        args.push_back(const_cast<char*>(parsed_line[0].c_str()));
-        for (size_t i = 1; i < parsed_line.size(); ++i) {
-            args.push_back(const_cast<char*>(parsed_line[i].c_str()));
-        }
-        args.push_back(nullptr);
-        pid_t pid = fork();
-        if(pid<0) {
-          perror("fork failed");
-          exit(EXIT_FAILURE);
-        }
-        else if(pid==0) {
-          execvp(args[0], args.data());
-          perror("execvp failed");
-          exit(EXIT_FAILURE);
-        }
-        else {
-          int status;
-          waitpid(pid, &status, 0);
-        }
-      } else {
-        std::cout << cmd_name << ": command not found" << std::endl;
-      }
-    }
-    
-    
   }
-  
+  return 0;
 }
