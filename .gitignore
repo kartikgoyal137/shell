@@ -9,13 +9,11 @@ server
 *.swp
 *~
 
-/build/
 /bin/
 /Debug/
 /Release/
 
-*.dSYM/    
-*.d     
+*.dSYM/
 
 *.bak
 
@@ -28,7 +26,10 @@ server
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
-Makefile
+
+# Build artifacts
+/ember
+/build/
 
 __pycache__/
 *.pyc

@@ -1,55 +1,48 @@
-# EmberShell
+# Ember Shell
 
-EmberShell is a lightweight, custom command-line shell written in C++. It mimics the core functionality of traditional UNIX shells like bash, providing an interactive interface to the operating system. This project demonstrates fundamental concepts of process management, inter-process communication, and system calls.
+A Unix shell written in C++17 that implements core shell semantics: tokenization, AST-based parsing, process execution with pipeline plumbing, I/O redirection, and word expansion.
+
+## Architecture
+
+```
+Input -> Tokenizer -> Parser -> Expander -> Executor
+            |            |          |           |
+         token.h     parser.h   expand.h   executor.h
+```
+
+- **Tokenizer** (`token.h/cpp`) — Splits raw input into tokens, handling single/double quoting, backslash escapes, and multi-character operators (`&&`, `||`, `>>`, `2>`).
+- **Parser** (`parser.h/cpp`) — Builds a structured AST: `CommandList` -> `Pipeline` -> `SimpleCommand`, with explicit redirection nodes attached to each command.
+- **Expander** (`expand.h/cpp`) — Tilde expansion (`~`, `~user`), variable expansion (`$VAR`, `${VAR}`, `$?`, `$$`), and glob expansion (`*`, `?`) via POSIX `glob(3)`.
+- **Executor** (`executor.h/cpp`) — Walks the AST. Forks processes, sets up pipes with `dup2`, applies I/O redirections, and handles `&&`/`||` short-circuit logic.
+- **Builtins** (`builtins.h/cpp`) — Commands that run in-process: `cd`, `exit`, `export`, `unset`, `echo`, `pwd`, `type`, `history`, `help`.
+- **Shell** (`shell.h/cpp`) — REPL loop, signal setup, readline/history integration, and prompt rendering.
 
 ## Features
 
-* **Interactive Command Line:** A stable and interactive prompt using the GNU `readline` library.
-* **Command History:** Persistent command history that is saved to a file (`$HISTFILE`) on exit and loaded on start.
-* **Tab Completion:** Basic auto-completion for built-in and external commands found in the user's `$PATH`.
-* **Command Execution:**
-    * Handles execution of external commands by searching the `$PATH` environment variable.
-    * Robust parsing of commands with arguments, including support for single (`'`) and double (`"`) quotes.
-* **Pipelines (`|`):** Full support for multi-command pipelines, allowing the standard output of one command to be piped to the standard input of another. This works for both external and built-in commands.
-* **Built-in Commands:** A suite of standard built-in commands are implemented directly within the shell for efficiency:
-    * `exit <code>`: Exits the shell.
-    * `cd <directory>`: Changes the current working directory. Supports `~` for the home directory.
-    * `pwd`: Prints the current working directory.
-    * `echo <args...>`: Prints arguments to standard output.
-    * `type <command>`: Indicates how a command would be interpreted (as a shell built-in or an external executable).
-    * `history [n]`: Displays the command history. Supports flags like `-w`, `-r`, and `-a` for file operations.
+- **Pipelines**: `cmd1 | cmd2 | cmd3` with correct pipe plumbing and fd cleanup.
+- **I/O Redirection**: `< file`, `> file`, `>> file`, `2> file`, `2>> file`. Works with both builtins and external commands.
+- **Logical operators**: `&&` (run next on success), `||` (run next on failure), `;` (always run next).
+- **Variable expansion**: `$VAR`, `${VAR}`, `$?` (last exit status), `$$` (shell PID).
+- **Tilde expansion**: `~` -> `$HOME`, `~user` -> that user's home.
+- **Glob expansion**: `*`, `?`, `[...]` patterns.
+- **Quoting**: Single quotes (literal), double quotes (with `\` escapes for `"`, `\`, `$`, `` ` ``).
+- **Signal handling**: Shell ignores SIGINT/SIGQUIT; child processes get default handlers.
+- **Tab completion**: Command names for the first word, filenames for arguments.
+- **Persistent history**: Loaded from / saved to `$HISTFILE`.
 
-## Prerequisites
+## Building
 
-To build and run CppShell, you will need:
+Requires: C++17 compiler, `libreadline-dev`.
 
-* A C++ compiler that supports C++17 (for `std::filesystem`), such as `g++`.
-* The GNU `readline` library (`libreadline-dev` or `readline-devel` package).
+```bash
+make            # optimized build
+make debug      # debug build with ASan + UBSan
+./ember
+```
 
-## Building and Running
+## Design Decisions
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://your-repo-url/CppShell.git
-    cd CppShell
-    ```
-
-2.  **Compile the source code:**
-    Use the following command to compile `main.cpp`:
-    ```bash
-    g++ main.cpp -o shell -lreadline -lhistory -std=c++17
-    ```
-
-3.  **Run the shell:**
-    Execute the compiled binary to start your shell session.
-    ```bash
-    ./shell
-    ```
-    You will be greeted with the `$` prompt.
-
-## Future Improvements
-
-* **I/O Redirection:** Implement input (`<`) and output (`>`, `>>`) redirection.
-* **Job Control:** Add support for running processes in the background (`&`) and managing them with commands like `jobs`, `fg`, and `bg`.
-* **Variable Expansion:** Implement support for shell variables and environment variable expansion (e.g., `echo $USER`).
-* **Code Refactoring:** Break down the monolithic `main.cpp` file into a more modular structure with classes for parsing, command execution, and job management.
+- **AST-based execution** rather than direct string manipulation. The tokenizer/parser/executor split makes it straightforward to add new syntax without touching execution logic.
+- **Expansion happens after parsing**, so glob results can't be re-interpreted as operators.
+- **Builtins run in-process** for single commands (so `cd`, `export` etc. can modify shell state), but fork like external commands when inside a pipeline.
+- **Redirections for builtins** use fd save/restore (`dup`/`dup2`) to avoid forking unnecessarily.
